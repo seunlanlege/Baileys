@@ -1,9 +1,12 @@
 import { MessageType, Mimetype, delay, promiseTimeout, WA_MESSAGE_STATUS_TYPE, WAMessageStatusUpdate } from '../WAConnection/WAConnection'
 import {promises as fs} from 'fs'
 import * as assert from 'assert'
-import { WAConnectionTest, testJid, sendAndRetreiveMessage } from './Common'
+import { WAConnectionTest, testJid, sendAndRetreiveMessage, assertChatDBIntegrity } from './Common'
 
 WAConnectionTest('Messages', conn => {
+
+    afterEach (() => assertChatDBIntegrity (conn))
+
     it('should send a text message', async () => {
         const message = await sendAndRetreiveMessage(conn, 'hello fren', MessageType.text)
         assert.strictEqual(message.message.conversation || message.message.extendedTextMessage?.text, 'hello fren')
@@ -18,11 +21,11 @@ WAConnectionTest('Messages', conn => {
         assert.equal (content?.contextInfo?.isForwarded, true)
     })
     it('should send a link preview', async () => {
-        const content = await conn.generateLinkPreview ('hello this is from https://www.github.com/adiwajshing/Baileys')
-        const message = await sendAndRetreiveMessage(conn, content, MessageType.text)
+        const text = 'hello this is from https://www.github.com/adiwajshing/Baileys'
+        const message = await sendAndRetreiveMessage(conn, text, MessageType.text, { detectLinks: true })
         const received = message.message.extendedTextMessage
         
-        assert.strictEqual(received.text, content.text)
+        assert.strictEqual(received.text, text)
         assert.ok (received.canonicalUrl)
         assert.ok (received.title)
         assert.ok (received.description)
@@ -58,20 +61,73 @@ WAConnectionTest('Messages', conn => {
         
         await conn.downloadAndSaveMediaMessage(message,'./Media/received_aud')
     })
+    it('should send an audio as a voice note', async () => {
+        const content = await fs.readFile('./Media/sonata.mp3')
+        const message = await sendAndRetreiveMessage(conn, content, MessageType.audio, { mimetype: Mimetype.ogg, ptt: true })
+        
+        assert.equal (message.message?.audioMessage?.ptt, true)
+        await conn.downloadAndSaveMediaMessage(message,'./Media/received_aud')
+    })
     it('should send an image', async () => {
         const content = await fs.readFile('./Media/meme.jpeg')
         const message = await sendAndRetreiveMessage(conn, content, MessageType.image)
-        
+        assert.ok (message.message?.imageMessage?.jpegThumbnail)
         await conn.downloadMediaMessage(message)
-        //const message2 = await sendAndRetreiveMessage (conn, 'this is a quote', MessageType.extendedText)
+    })
+    it('should send a png image', async () => {
+        const content = await fs.readFile('./Media/icon.png')
+        const message = await sendAndRetreiveMessage(conn, content, MessageType.image, { mimetype: 'image/png' })
+        assert.ok (message.message?.imageMessage?.jpegThumbnail)
+        await conn.downloadMediaMessage(message)
     })
     it('should send a sticker', async () => {
         const content = await fs.readFile('./Media/octopus.webp')
         const message = await sendAndRetreiveMessage(conn, content, MessageType.sticker)
         
         await conn.downloadMediaMessage(message)
-        //const message2 = await sendAndRetreiveMessage (conn, 'this is a quote', MessageType.extendedText)
     })
+    /*it('should send an interactive message', async () => {
+        
+        console.log (
+            JSON.stringify(await conn.loadMessages (testJid, 5), null, '\t')
+        )
+        const message = conn.prepareMessageFromContent (
+            testJid,
+            {
+                templateMessage: {
+                    fourRowTemplate: {
+                        content: {
+                            namespace: 'my-namespace',
+                            localizableParams: [
+                                
+                            ],
+                            params: ['hello!']
+                        },
+                        buttons: [
+                            {
+                                index: 0,
+                                quickReplyButton: {
+                                    displayText: {
+                                        params: ['my name jeff']
+                                    }
+                                }
+                            },
+                            {
+                                index: 1,
+                                quickReplyButton: {
+                                    displayText: {
+                                        params: ['my name NOT jeff'],
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }
+            },
+            {}
+        )
+        await conn.relayWAMessage (message)
+    })*/
     it('should send an image & quote', async () => {
         const quoted = (await conn.loadMessages(testJid, 2)).messages[0]
         const content = await fs.readFile('./Media/meme.jpeg')
@@ -105,20 +161,56 @@ WAConnectionTest('Messages', conn => {
         const JID = '1234-1234@g.us'
         conn.sendMessage(JID, 'hello', MessageType.text)
 
-        conn.on ('message-status-update', update => {
+        conn.on ('message-status-update', async update => {
             if (update.to === JID) {
                 assert.equal (update.type, WA_MESSAGE_STATUS_TYPE.ERROR)
+                await conn.deleteChat (JID)
                 done ()
             }
         })
     })
-    it('should not duplicate messages', async () => {
+    it('should maintain message integrity', async () => {
+        // loading twice does not alter the results
         const results = await Promise.all ([
             conn.loadMessages (testJid, 50),
             conn.loadMessages (testJid, 50)
         ])
-        assert.deepEqual (results[0].messages, results[1].messages)
+        assert.equal (results[0].messages.length, results[1].messages.length)
+        for (let i = 0; i < results[1].messages.length;i++) {
+            assert.deepEqual (results[0].messages[i], results[1].messages[i], `failed equal at ${i}`)
+        }
         assert.ok (results[0].messages.length <= 50)
+
+        // check if messages match server
+        let msgs = await conn.fetchMessagesFromWA (testJid, 50)
+        for (let i = 0; i < results[1].messages.length;i++) {
+            assert.deepEqual (results[0].messages[i].key, msgs[i].key, `failed equal at ${i}`)
+        }
+        // check with some arbitary cursors
+        let cursor = results[0].messages.slice(-1)[0].key
+        
+        msgs = await conn.fetchMessagesFromWA (testJid, 20, cursor)
+        let {messages} = await conn.loadMessages (testJid, 20, cursor)
+        for (let i = 0; i < messages.length;i++) {
+            assert.deepEqual (messages[i].key, msgs[i].key, `failed equal at ${i}`)
+        }
+        for (let i = 0; i < 3;i++) {
+            cursor = results[0].messages[i].key
+        
+            msgs = await conn.fetchMessagesFromWA (testJid, 20, cursor)
+            messages = (await conn.loadMessages (testJid, 20, cursor)).messages
+            for (let i = 0; i < messages.length;i++) {
+                assert.deepEqual (messages[i].key, msgs[i].key, `failed equal at ${i}`)
+            }
+
+            cursor = msgs[0].key
+
+            msgs = await conn.fetchMessagesFromWA (testJid, 20, cursor)
+            messages = (await conn.loadMessages (testJid, 20, cursor)).messages
+            for (let i = 0; i < messages.length;i++) {
+                assert.deepEqual (messages[i].key, msgs[i].key, `failed equal at ${i}`)
+            }
+        }
     })
     it('should deliver a message', async () => {
         const waitForUpdate = 

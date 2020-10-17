@@ -15,7 +15,7 @@ export declare class WAConnection extends Base {
     /** Prepares the message content */
     prepareMessageContent(message: string | WATextMessage | WALocationMessage | WAContactMessage | Buffer, type: MessageType, options: MessageOptions): Promise<WAMessageProto.Message>;
     /** Prepare a media message for sending */
-    prepareMessageMedia(buffer: Buffer, mediaType: MessageType, options?: MessageOptions): Promise<WAMessageProto.IMessage>;
+    prepareMessageMedia(buffer: Buffer, mediaType: MessageType, options?: MessageOptions): Promise<WAMessageProto.Message>;
     /** prepares a WAMessage for sending from the given content & options */
     prepareMessageFromContent(id: string, message: WAMessageContent, options: MessageOptions): WAMessageProto.WebMessageInfo;
     /** Relay (send) a WAMessage; more advanced functionality to send a built WA Message, you may want to stick with sendMessage() */
@@ -39,5 +39,8 @@ export declare class WAConnection extends Base {
      * @param attachExtension should the parsed extension be applied automatically to the file
      */
     downloadAndSaveMediaMessage(message: WAMessage, filename: string, attachExtension?: boolean): Promise<string>;
-    protected refreshMediaConn(): Promise<MediaConnInfo>;
+    /** Query a string to check if it has a url, if it does, return required extended text message */
+    generateLinkPreview(text: string): Promise<WAMessageProto.ExtendedTextMessage>;
+    protected refreshMediaConn(forceGet?: boolean): Promise<MediaConnInfo>;
+    protected getNewMediaConn(): Promise<MediaConnInfo>;
 }

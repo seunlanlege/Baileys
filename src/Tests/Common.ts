@@ -1,4 +1,4 @@
-import { WAConnection, MessageLogLevel, MessageOptions, MessageType, unixTimestampSeconds, toNumber } from '../WAConnection/WAConnection'
+import { WAConnection, MessageOptions, MessageType, unixTimestampSeconds, toNumber, GET_MESSAGE_ID, waMessageKey } from '../WAConnection/WAConnection'
 import * as assert from 'assert'
 import {promises as fs} from 'fs'
 
@@ -13,18 +13,17 @@ export async function sendAndRetreiveMessage(conn: WAConnection, content, type: 
 
     const chat = conn.chats.get(testJid)
 
-    assertChatDBIntegrity (conn)
-    assert.ok (chat.messages.find(m => m.key.id === response.key.id))
+    assert.ok (chat.messages.get(GET_MESSAGE_ID(message.key)))
     assert.ok (chat.t >= (unixTimestampSeconds()-5) )
     return message
 }
 export const WAConnectionTest = (name: string, func: (conn: WAConnection) => void) => (
     describe(name, () => {
         const conn = new WAConnection()
-        conn.logLevel = MessageLogLevel.info
+        conn.connectOptions.maxIdleTimeMs = 30_000
+        conn.logger.level = 'debug'
 
         before(async () => {
-            //conn.logLevel = MessageLogLevel.unhandled
             const file = './auth_info.json'
             await conn.loadAuthInfo(file).connect()
             await fs.writeFile(file, JSON.stringify(conn.base64EncodedAuthInfo(), null, '\t'))
@@ -37,13 +36,13 @@ export const WAConnectionTest = (name: string, func: (conn: WAConnection) => voi
 export const assertChatDBIntegrity = (conn: WAConnection) => {
     conn.chats.all ().forEach (chat => (
         assert.deepEqual (
-            [...chat.messages].sort ((m1, m2) => toNumber(m1.messageTimestamp)-toNumber(m2.messageTimestamp)),
-            chat.messages
+            [...chat.messages.all()].sort ((m1, m2) => waMessageKey.compare(waMessageKey.key(m1), waMessageKey.key(m2))),
+            chat.messages.all()
         )
     ))
     conn.chats.all ().forEach (chat => (
         assert.deepEqual (
-            chat.messages.filter (m => chat.messages.filter(m1 => m1.key.id === m.key.id).length > 1),
+            chat.messages.all().filter (m => chat.messages.all().filter(m1 => m1.key.id === m.key.id).length > 1),
             []
         )
     ))

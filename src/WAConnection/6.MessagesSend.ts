@@ -9,7 +9,7 @@ import {
     WALocationMessage,
     WAContactMessage,
     WATextMessage,
-    WAMessageContent, WAMetric, WAFlag, WAMessage, BaileysError, MessageLogLevel, WA_MESSAGE_STATUS_TYPE, WAMessageProto, MediaConnInfo
+    WAMessageContent, WAMetric, WAFlag, WAMessage, BaileysError, WA_MESSAGE_STATUS_TYPE, WAMessageProto, MediaConnInfo, MessageTypeProto, URL_REGEX, WAUrlInfo
 } from './Constants'
 import { generateMessageID, sha256, hmacSign, aesEncrypWithIV, randomBytes, generateThumbnail, getMediaKeys, decodeMediaMessageBuffer, extensionForMediaMessage, whatsappID, unixTimestampSeconds  } from './Utils'
 import { Mutex } from './Mutex'
@@ -53,22 +53,31 @@ export class WAConnection extends Base {
         switch (type) {
             case MessageType.text:
             case MessageType.extendedText:
-                if (typeof message === 'string') {
-                    m.extendedTextMessage = {text: message}
-                } else if ('text' in message) {
-                    m.extendedTextMessage = message as WATextMessage
+                if (typeof message === 'string') message = {text: message} as WATextMessage
+                
+                if ('text' in message) {
+                    if (options.detectLinks !== false && message.text.match(URL_REGEX)) {
+                        try {
+                            message = await this.generateLinkPreview (message.text)
+                        } catch { } // ignore if fails
+                    }
+                    m.extendedTextMessage = WAMessageProto.ExtendedTextMessage.create(message as any)
                 } else {
                     throw new BaileysError ('message needs to be a string or object with property \'text\'', message)
                 }
                 break
             case MessageType.location:
             case MessageType.liveLocation:
-                m.locationMessage = message as WALocationMessage
+                m.locationMessage = WAMessageProto.LocationMessage.create(message as any)
                 break
             case MessageType.contact:
-                m.contactMessage = message as WAContactMessage
+                m.contactMessage = WAMessageProto.ContactMessage.create(message as any)
                 break
-            default:
+            case MessageType.image:
+            case MessageType.sticker:
+            case MessageType.document:
+            case MessageType.video:
+            case MessageType.audio:
                 m = await this.prepareMessageMedia(message as Buffer, type, options)
                 break
         }
@@ -97,48 +106,60 @@ export class WAConnection extends Base {
         const mac = hmacSign(Buffer.concat([mediaKeys.iv, enc]), mediaKeys.macKey).slice(0, 10)
         const body = Buffer.concat([enc, mac]) // body is enc + mac
         const fileSha256 = sha256(buffer)
-        // url safe Base64 encode the SHA256 hash of the body
-        const fileEncSha256B64 = sha256(body)
-                                .toString('base64')
-                                .replace(/\+/g, '-')
-                                .replace(/\//g, '_')
-                                .replace(/\=+$/, '')
+        const fileEncSha256 = sha256(body)
+         // url safe Base64 encode the SHA256 hash of the body
+        const fileEncSha256B64 = encodeURIComponent(
+                                    fileEncSha256
+                                    .toString('base64')
+                                    .replace(/\+/g, '-')
+                                    .replace(/\//g, '_')
+                                    .replace(/\=+$/, '')
+                                )
 
         await generateThumbnail(buffer, mediaType, options)
 
         // send a query JSON to obtain the url & auth token to upload our media
-        const json = await this.refreshMediaConn ()
-        const auth = json.auth // the auth token
+        let json = await this.refreshMediaConn (options.forceNewMediaOptions)
 
         let mediaUrl: string
         for (let host of json.hosts) {
-            const hostname = `https://${host.hostname}${MediaPathMap[mediaType]}/${fileEncSha256B64}?auth=${auth}&token=${fileEncSha256B64}`
+            const auth = encodeURIComponent(json.auth) // the auth token
+            const url = `https://${host.hostname}${MediaPathMap[mediaType]}/${fileEncSha256B64}?auth=${auth}&token=${fileEncSha256B64}`
+            
             try {
-                const urlFetch = await this.fetchRequest(hostname, 'POST', body)
-                mediaUrl = (await urlFetch.json())?.url
+                const urlFetch = await this.fetchRequest(url, 'POST', body, options.uploadAgent, { 'Content-Type': 'application/octet-stream' })
+                const result = await urlFetch.json()
+                mediaUrl = result?.url
                 
                 if (mediaUrl) break
-                else throw new Error (`upload failed`)
+                else {
+                    json = await this.refreshMediaConn (true)
+                    throw new Error (`upload failed, reason: ${JSON.stringify(result)}`)
+                }
             } catch (error) {
                 const isLast = host.hostname === json.hosts[json.hosts.length-1].hostname
-                this.log (`Error in uploading to ${host.hostname}${isLast ? '' : ', retrying...'}`, MessageLogLevel.info)
+                this.logger.error (`Error in uploading to ${host.hostname}${isLast ? '' : ', retrying...'}`)
             }
         }
         if (!mediaUrl) throw new Error('Media upload failed on all hosts')
 
-        const message = {}
-        message[mediaType] = {
-            url: mediaUrl,
-            mediaKey: mediaKey.toString('base64'),
-            mimetype: options.mimetype,
-            fileEncSha256: fileEncSha256B64,
-            fileSha256: fileSha256.toString('base64'),
-            fileLength: buffer.length,
-            fileName: options.filename || 'file',
-            gifPlayback: isGIF || null,
-            caption: options.caption
-        }
-        return message as WAMessageContent
+        const message = {
+            [mediaType]: MessageTypeProto[mediaType].create (
+                {
+                    url: mediaUrl,
+                    mediaKey: mediaKey,
+                    mimetype: options.mimetype,
+                    fileEncSha256: fileEncSha256,
+                    fileSha256: fileSha256,
+                    fileLength: buffer.length,
+                    fileName: options.filename || 'file',
+                    gifPlayback: isGIF || undefined,
+                    caption: options.caption,
+                    ptt: options.ptt
+                }
+            )
+        }   
+        return WAMessageProto.Message.create(message)// as WAMessageContent
     }
     /** prepares a WAMessage for sending from the given content & options */
     prepareMessageFromContent(id: string, message: WAMessageContent, options: MessageOptions) {
@@ -167,7 +188,10 @@ export class WAConnection extends Base {
                 message[key].contextInfo.remoteJid = quoted.key.remoteJid
             }
         }
-        if (!message[key].jpegThumbnail) message[key].jpegThumbnail = options?.thumbnail
+        if (options?.thumbnail) {
+            message[key].jpegThumbnail = Buffer.from(options.thumbnail, 'base64')
+        }
+        message = WAMessageProto.Message.create (message)
 
         const messageJSON = {
             key: {
@@ -188,6 +212,8 @@ export class WAConnection extends Base {
         const json = ['action', {epoch: this.msgCount.toString(), type: 'relay'}, [['message', null, message]]]
         const flag = message.key.remoteJid === this.user.jid ? WAFlag.acknowledge : WAFlag.ignore // acknowledge when sending message to oneself
         await this.query({json, binaryTags: [WAMetric.message, flag], tag: message.key.id, expect200: true})
+        
+        message.status = WA_MESSAGE_STATUS_TYPE.SERVER_ACK
         await this.chatAddMessageAppropriate (message)
     }
     /**
@@ -215,7 +241,7 @@ export class WAConnection extends Base {
             return buff
         } catch (error) {
             if (error instanceof BaileysError && error.status === 404) { // media needs to be updated
-                this.log (`updating media of message: ${message.key.id}`, MessageLogLevel.info)
+                this.logger.info (`updating media of message: ${message.key.id}`)
                 await this.updateMediaMessage (message)
                 const buff = await decodeMediaMessageBuffer (message.message, this.fetchRequest)
                 return buff
@@ -237,13 +263,33 @@ export class WAConnection extends Base {
         await fs.writeFile (trueFileName, buffer)
         return trueFileName
     }
+    /** Query a string to check if it has a url, if it does, return required extended text message */
+    async generateLinkPreview (text: string) {
+        const query = ['query', {type: 'url', url: text, epoch: this.msgCount.toString()}, null]
+        const response = await this.query ({json: query, binaryTags: [26, WAFlag.ignore], expect200: true, requiresPhoneConnection: false})
 
-    protected async refreshMediaConn () {
-        if (!this.mediaConn || (new Date().getTime()-this.mediaConn.fetchDate.getTime()) > this.mediaConn.ttl*1000) {
-            const result = await this.query({json: ['query', 'mediaConn']})
-            this.mediaConn = result.media_conn
+        if (response[1]) response[1].jpegThumbnail = response[2]
+        const data = response[1] as WAUrlInfo
+
+        const content = {text} as WATextMessage
+        content.canonicalUrl = data['canonical-url']
+        content.matchedText = data['matched-text']
+        content.jpegThumbnail = data.jpegThumbnail
+        content.description = data.description
+        content.title = data.title
+        content.previewType = 0
+        return content
+    }
+    @Mutex ()
+    protected async refreshMediaConn (forceGet = false) {
+        if (!this.mediaConn || forceGet || (new Date().getTime()-this.mediaConn.fetchDate.getTime()) > this.mediaConn.ttl*1000) {
+            this.mediaConn = await this.getNewMediaConn()
             this.mediaConn.fetchDate = new Date()
         }
         return this.mediaConn
+    }
+    protected async getNewMediaConn () {
+        const {media_conn} = await this.query({json: ['query', 'mediaConn'], requiresPhoneConnection: false})
+        return media_conn as MediaConnInfo
     }
 }

@@ -48,6 +48,18 @@ export class WAConnection extends Base {
      */
     groupCreate = async (title: string, participants: string[]) => {
         const response = await this.groupQuery('create', null, title, participants) as WAGroupCreateResponse
+        const gid = response.gid
+        try {
+            await this.groupMetadata (gid)
+        } catch (error) {
+            this.logger.warn (`error in group creation: ${error}, switching gid & checking`)
+            // if metadata is not available
+            const comps = gid.replace ('@g.us', '').split ('-')
+            response.gid = `${comps[0]}-${+comps[1] + 1}@g.us`
+
+            await this.groupMetadata (gid)
+            this.logger.warn (`group ID switched from ${gid} to ${response.gid}`)
+        }
         await this.chatAdd (response.gid, title)
         return response
     }
@@ -133,7 +145,7 @@ export class WAConnection extends Base {
     /** Get the invite link of the given group */
     async groupInviteCode(jid: string) {
         const json = ['query', 'inviteCode', jid]
-        const response = await this.query({json, expect200: true})
+        const response = await this.query({json, expect200: true, requiresPhoneConnection: false})
         return response.code as string
     }
 }

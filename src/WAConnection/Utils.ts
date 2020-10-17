@@ -9,7 +9,7 @@ import { URL } from 'url'
 import { Agent } from 'https'
 
 import Decoder from '../Binary/Decoder'
-import { MessageType, HKDFInfoKeys, MessageOptions, WAChat, WAMessageContent, BaileysError, WAMessageProto, TimedOutError, CancelledError, WAGenericMediaMessage } from './Constants'
+import { MessageType, HKDFInfoKeys, MessageOptions, WAChat, WAMessageContent, BaileysError, WAMessageProto, TimedOutError, CancelledError, WAGenericMediaMessage, WAMessage, WAMessageKey } from './Constants'
 
 const platformMap = {
     'aix': 'AIX',
@@ -24,15 +24,20 @@ export const Browsers = {
     /** The appropriate browser based on your OS & release */
     appropriate: browser => [ platformMap [platform()] || 'Ubuntu', browser, release() ] as [string, string, string]
 }
-function hashCode(s: string) {
-    for(var i = 0, h = 0; i < s.length; i++)
-        h = Math.imul(31, h) + s.charCodeAt(i) | 0;
-    return h;
-}
 export const toNumber = (t: Long | number) => (t['low'] || t) as number
-export const waChatUniqueKey = (c: WAChat) => ((c.t*100000) + (hashCode(c.jid)%100000))*-1 // -1 to sort descending
+export const waChatKey = (pin: boolean) => ({
+    key: (c: WAChat) => (pin ? (c.pin ? '1' : '0') : '') + c.t.toString(16).padStart(8, '0') + c.jid,
+    compare: (k1: string, k2: string) => k2.localeCompare (k1)
+})
+export const waMessageKey = {
+    key: (m: WAMessage) => (5000 + (m['epoch'] || 0)).toString(16) + toNumber (m.messageTimestamp).toString(16).padStart(8, '0'),
+    compare: (k1: string, k2: string) => k1.localeCompare (k2)
+}
+export const WA_MESSAGE_ID = (m: WAMessage) => GET_MESSAGE_ID (m.key)
+export const GET_MESSAGE_ID = (key: WAMessageKey) => `${key.id}|${key.fromMe ? 1 : 0}`
+
 export const whatsappID = (jid: string) => jid?.replace ('@c.us', '@s.whatsapp.net')
-export const isGroupID = (jid: string) => jid?.includes ('@g.us')
+export const isGroupID = (jid: string) => jid?.endsWith ('@g.us')
 
 export function shallowChanges <T> (old: T, current: T): Partial<T> {
     let changes: Partial<T> = {}
@@ -147,8 +152,7 @@ export function decryptWA (message: string | Buffer, macKey: Buffer, encKey: Buf
             json = JSON.parse(data) // parse the JSON
         } else {
             if (!macKey || !encKey) {
-                console.warn ('recieved encrypted buffer when auth creds unavailable: ' + message)
-                return
+                throw new Error ('recieved encrypted buffer when auth creds unavailable: ' + message)
             }
             /* 
                 If the data recieved was not a JSON, then it must be an encrypted message.
@@ -168,14 +172,13 @@ export function decryptWA (message: string | Buffer, macKey: Buffer, encKey: Buf
                 const decrypted = aesDecrypt(data, encKey) // decrypt using AES
                 json = decoder.read(decrypted) // decode the binary message into a JSON array
             } else {
-                console.error (`
-                    Checksums don't match:
-                    og: ${checksum.toString('hex')}
-                    computed: ${computedChecksum.toString('hex')}
-                    data: ${data.slice(0, 80).toString()}
-                    tag: ${messageTag}
-                    message: ${message.slice(0, 80).toString()}
-                `)
+                throw new BaileysError ('checksum failed', {
+                    received: checksum.toString('hex'),
+                    computed: computedChecksum.toString('hex'),
+                    data: data.slice(0, 80).toString(),
+                    tag: messageTag,
+                    message: message.slice(0, 80).toString()
+                })
             }
         }   
     }
@@ -231,7 +234,7 @@ export const mediaMessageSHA256B64 = (message: WAMessageContent) => {
 
 /** generates a thumbnail for a given media, if required */
 export async function generateThumbnail(buffer: Buffer, mediaType: MessageType, info: MessageOptions) {
-    if (info.thumbnail === null || info.thumbnail) {
+    if ('thumbnail' in info) {
         // don't do anything if the thumbnail is already provided, or is null
         if (mediaType === MessageType.audio) {
             throw new Error('audio messages cannot have thumbnails')

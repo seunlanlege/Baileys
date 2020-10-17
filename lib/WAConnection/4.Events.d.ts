@@ -1,5 +1,5 @@
 import { WAConnection as Base } from './3.Connect';
-import { WAMessageStatusUpdate, WAMessage, WAChat, WA_MESSAGE_STATUS_TYPE, PresenceUpdate, BaileysEvent, DisconnectReason, WAOpenResult } from './Constants';
+import { WAMessageStatusUpdate, WAMessage, WAChat, WA_MESSAGE_STATUS_TYPE, PresenceUpdate, BaileysEvent, DisconnectReason, WAOpenResult, AuthenticationCredentials } from './Constants';
 export declare class WAConnection extends Base {
     constructor();
     /** Get the URL to download the profile picture of a person/group */
@@ -25,6 +25,12 @@ export declare class WAConnection extends Base {
         reason?: DisconnectReason | string;
         isReconnecting: boolean;
     }) => void): this;
+    /** when the connection has closed */
+    on(event: 'intermediate-close', listener: (err: {
+        reason?: DisconnectReason | string;
+    }) => void): this;
+    /** when WA updates the credentials */
+    on(event: 'credentials-updated', listener: (auth: AuthenticationCredentials) => void): this;
     /** when a new QR is generated, ready for scanning */
     on(event: 'qr', listener: (qr: string) => void): this;
     /** when the connection to the phone changes */

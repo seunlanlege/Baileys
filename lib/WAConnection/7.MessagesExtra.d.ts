@@ -23,18 +23,25 @@ export declare class WAConnection extends Base {
     }, count: number): Promise<{
         status: number;
     }>;
+    fetchMessagesFromWA(jid: string, count: number, indexMessage?: {
+        id?: string;
+        fromMe?: boolean;
+    }, mostRecentFirst?: boolean): Promise<WAMessageProto.WebMessageInfo[]>;
     /**
      * Load the conversation with a group or person
      * @param count the number of messages to load
-     * @param before the data for which message to offset the query by
+     * @param cursor the data for which message to offset the query by
      * @param mostRecentFirst retreive the most recent message first or retreive from the converation start
      */
-    loadMessages(jid: string, count: number, before?: {
+    loadMessages(jid: string, count: number, cursor?: {
         id?: string;
         fromMe?: boolean;
     }, mostRecentFirst?: boolean): Promise<{
         messages: WAMessageProto.WebMessageInfo[];
-        cursor: any;
+        cursor: {
+            id?: string;
+            fromMe?: boolean;
+        };
     }>;
     /**
      * Load the entire friggin conversation with a group or person
@@ -54,9 +61,7 @@ export declare class WAConnection extends Base {
      */
     messagesReceivedAfter(date: Date, onlyUnrespondedMessages?: boolean): Promise<WAMessageProto.WebMessageInfo[]>;
     /** Load a single message specified by the ID */
-    loadMessage(jid: string, messageID: string): Promise<WAMessageProto.WebMessageInfo>;
-    /** Query a string to check if it has a url, if it does, return required extended text message */
-    generateLinkPreview(text: string): Promise<WAMessageProto.ExtendedTextMessage>;
+    loadMessage(jid: string, id: string): Promise<WAMessageProto.WebMessageInfo>;
     /**
      * Search WhatsApp messages with a given text string
      * @param txt the search string

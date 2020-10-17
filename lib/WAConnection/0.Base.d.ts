@@ -2,9 +2,11 @@
 import WS from 'ws';
 import Encoder from '../Binary/Encoder';
 import Decoder from '../Binary/Decoder';
-import { AuthenticationCredentials, WAUser, WANode, WATag, MessageLogLevel, DisconnectReason, WAConnectionState, AnyAuthenticationCredentials, WAContact, WAChat, WAQuery, ReconnectMode, WAConnectOptions, MediaConnInfo } from './Constants';
+import { AuthenticationCredentials, WAUser, WANode, WATag, DisconnectReason, WAConnectionState, AnyAuthenticationCredentials, WAContact, WAChat, WAQuery, ReconnectMode, WAConnectOptions, MediaConnInfo } from './Constants';
 import { EventEmitter } from 'events';
 import KeyedDB from '@adiwajshing/keyed-db';
+import { Agent } from 'http';
+import pino from 'pino';
 export declare class WAConnection extends EventEmitter {
     /** The version of WhatsApp Web we're telling the servers we are */
     version: [number, number, number];
@@ -12,21 +14,31 @@ export declare class WAConnection extends EventEmitter {
     browserDescription: [string, string, string];
     /** Metadata like WhatsApp id, name set on WhatsApp etc. */
     user: WAUser;
-    /** What level of messages to log to the console */
-    logLevel: MessageLogLevel;
     /** Should requests be queued when the connection breaks in between; if 0, then an error will be thrown */
     pendingRequestTimeoutMs: number;
     /** The connection state */
     state: WAConnectionState;
-    /** New QR generation interval, set to null if you don't want to regenerate */
-    regenerateQRIntervalMs: number;
     connectOptions: WAConnectOptions;
     /** When to auto-reconnect */
     autoReconnect: ReconnectMode;
     /** Whether the phone is connected */
     phoneConnected: boolean;
+    /** key to use to order chats */
+    chatOrderingKey: {
+        key: (c: WAChat) => string;
+        compare: (k1: string, k2: string) => number;
+    };
+    logger: pino.Logger;
+    /** log messages */
+    shouldLogMessages: boolean;
+    messageLog: {
+        tag: string;
+        json: string;
+        fromMe: boolean;
+        binaryTags?: any[];
+    }[];
     maxCachedMessages: number;
-    chats: KeyedDB<WAChat>;
+    chats: KeyedDB<WAChat, string>;
     contacts: {
         [k: string]: WAContact;
     };
@@ -50,12 +62,14 @@ export declare class WAConnection extends EventEmitter {
         resolve: () => void;
         reject: (error: any) => void;
     }[];
+    protected phoneCheckInterval: any;
     protected referenceDate: Date;
     protected lastSeen: Date;
     protected qrTimeout: NodeJS.Timeout;
     protected lastDisconnectTime: Date;
     protected lastDisconnectReason: DisconnectReason;
     protected mediaConn: MediaConnInfo;
+    protected debounceTimeout: NodeJS.Timeout;
     constructor();
     /**
      * Connect to WhatsAppWeb
@@ -98,7 +112,7 @@ export declare class WAConnection extends EventEmitter {
      * @param json query that was sent
      * @param timeoutMs timeout after which the promise will reject
      */
-    waitForMessage(tag: string, json?: Object, timeoutMs?: number): Promise<any>;
+    waitForMessage(tag: string, json: Object, requiresPhoneConnection: boolean, timeoutMs?: number): Promise<any>;
     /** Generic function for action, set queries */
     setQuery(nodes: WANode[], binaryTags?: WATag, tag?: string): Promise<{
         status: number;
@@ -109,9 +123,12 @@ export declare class WAConnection extends EventEmitter {
      * @param binaryTags the tags to attach if the query is supposed to be sent encoded in binary
      * @param timeoutMs timeout after which the query will be failed (set to null to disable a timeout)
      * @param tag the tag to attach to the message
-     * recieved JSON
      */
-    query({ json, binaryTags, tag, timeoutMs, expect200, waitForOpen, longTag }: WAQuery): any;
+    query(q: WAQuery): any;
+    /** interval is started when a query takes too long to respond */
+    protected startPhoneCheckInterval(): void;
+    protected clearPhoneCheckInterval(): void;
+    protected sendAdminTest(): Promise<string>;
     /**
      * Send a binary encoded message
      * @param json the message to encode & send
@@ -119,16 +136,16 @@ export declare class WAConnection extends EventEmitter {
      * @param tag the tag to attach to the message
      * @return the message tag
      */
-    protected sendBinary(json: WANode, tags: WATag, tag?: string, longTag?: boolean): string;
+    protected sendBinary(json: WANode, tags: WATag, tag?: string, longTag?: boolean): Promise<string>;
     /**
      * Send a plain JSON message to the WhatsApp servers
      * @param json the message to send
      * @param tag the tag to attach to the message
-     * @return the message tag
+     * @returns the message tag
      */
-    protected sendJSON(json: any[] | WANode, tag?: string, longTag?: boolean): string;
+    protected sendJSON(json: any[] | WANode, tag?: string, longTag?: boolean): Promise<string>;
     /** Send some message to the WhatsApp servers */
-    protected send(m: any): void;
+    protected send(m: any): Promise<void>;
     protected waitForConnection(): Promise<void>;
     /**
      * Disconnect from the phone. Your auth credentials become invalid after sending a disconnect request.
@@ -142,7 +159,8 @@ export declare class WAConnection extends EventEmitter {
     /**
      * Does a fetch request with the configuration of the connection
      */
-    protected fetchRequest: (endpoint: string, method?: string, body?: any) => any;
+    protected fetchRequest: (endpoint: string, method?: string, body?: any, agent?: Agent, headers?: {
+        [k: string]: string;
+    }) => any;
     generateMessageTag(longTag?: boolean): string;
-    protected log(text: any, level: MessageLogLevel): void;
 }

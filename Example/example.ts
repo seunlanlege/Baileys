@@ -5,38 +5,40 @@ import {
     MessageOptions,
     Mimetype,
     WALocationMessage,
-    MessageLogLevel,
     WA_MESSAGE_STUB_TYPES,
     ReconnectMode,
     ProxyAgent,
+    waChatKey,
 } from '../src/WAConnection/WAConnection'
 import * as fs from 'fs'
 
 async function example() {
     const conn = new WAConnection() // instantiate
     conn.autoReconnect = ReconnectMode.onConnectionLost // only automatically reconnect when the connection breaks
-    conn.logLevel = MessageLogLevel.info // set to unhandled to see what kind of stuff you can implement
+    conn.logger.level = 'debug' // set to 'debug' to see what kind of stuff you can implement
+    // attempt to reconnect at most 10 times in a row
+    conn.connectOptions.maxRetries = 10
+    conn.chatOrderingKey = waChatKey(true) // order chats such that pinned chats are on top
 
+    conn.on ('credentials-updated', () => {
+        // save credentials whenever updated
+        console.log (`credentials updated`)
+        const authInfo = conn.base64EncodedAuthInfo() // get all the auth info we need to restore this session
+        fs.writeFileSync('./auth_info.json', JSON.stringify(authInfo, null, '\t')) // save this info to a file
+    })
 
     // loads the auth file credentials if present
     fs.existsSync('./auth_info.json') && conn.loadAuthInfo ('./auth_info.json')
-    
-    // connect or timeout in 60 seconds
-    conn.connectOptions.timeoutMs = 60*1000
-    // attempt to reconnect at most 10 times
-    conn.connectOptions.maxRetries = 10
     // uncomment the following line to proxy the connection; some random proxy I got off of: https://proxyscrape.com/free-proxy-list
     //conn.connectOptions.agent = ProxyAgent ('http://1.0.180.120:8080')
     await conn.connect()
 
-    const unread = await conn.loadAllUnreadMessages ()
-    
     console.log('oh hello ' + conn.user.name + ' (' + conn.user.jid + ')')
-    console.log('you have ' + conn.chats.all().length + ' chats & ' + Object.keys(conn.contacts).length + ' contacts')
-    console.log ('you have ' + unread.length + ' unread messages')
-
-    const authInfo = conn.base64EncodedAuthInfo() // get all the auth info we need to restore this session
-    fs.writeFileSync('./auth_info.json', JSON.stringify(authInfo, null, '\t')) // save this info to a file
+    console.log('you have ' + conn.chats.length + ' chats & ' + Object.keys(conn.contacts).length + ' contacts')
+    
+    // uncomment to load all unread messages
+    //const unread = await conn.loadAllUnreadMessages ()
+    //console.log ('you have ' + unread.length + ' unread messages')
 
     /*  Note: one can take this auth_info.json file and login again from any computer without having to scan the QR code, 
         and get full access to one's WhatsApp. Despite the convenience, be careful with this file */

@@ -68,7 +68,9 @@ Do note, the `chats` object returned is now a [KeyedDB](https://github.com/adiwa
 - Most applications require pagination of chats (Use `chats.paginated()`)
 - Most applications require **O(1)** access to chats via the chat ID. (Use `chats.get(jid)` with `KeyedDB`)
 
-## Connecting via an HTTPS proxy
+## Configuring the Connection
+
+You can configure the connection via the `connectOptions` property. You can even specify an HTTPS proxy. For example:
 
 ``` ts
 import { WAConnection, ProxyAgent } from '@adiwajshing/baileys'
@@ -80,18 +82,54 @@ await conn.connect ()
 console.log ("oh hello " + conn.user.name + "! You connected via a proxy")
 ```
 
+The entire `WAConnectOptions` struct is mentioned here with default values:
+``` ts
+conn.connectOptions = {
+    /** New QR generation interval, set to null if you don't want to regenerate */
+    regenerateQRIntervalMs?: 30_000
+    /** fails the connection if no data is received for X seconds */
+    maxIdleTimeMs?: 15_000
+    /** maximum attempts to connect */
+    maxRetries?: 5
+    /** should the chats be waited for; 
+     * should generally keep this as true, unless you only care about sending & receiving new messages 
+     * & don't care about chat history
+     * */
+    waitForChats?: true
+    /** if set to true, the connect only waits for the last message of the chat
+     * setting to false, generally yields a faster connect
+     */
+    waitOnlyForLastMessage?: false
+    /** max time for the phone to respond to a connectivity test */
+    phoneResponseTime?: 10_000
+    /** minimum time between new connections */
+    connectCooldownMs?: 3000
+    /** agent used for WS connections (could be a proxy agent) */
+    agent?: Agent = undefined
+    /** agent used for fetch requests -- uploading/downloading media */
+    fetchAgent?: Agent = undefined
+    /** always uses takeover for connecting */
+    alwaysUseTakeover: true
+} as WAConnectOptions
+```
+
 ## Saving & Restoring Sessions
 
 You obviously don't want to keep scanning the QR code every time you want to connect. 
 
-So, do the following every time you open a new connection:
+So, you can save the credentials to log back in via:
 ``` ts
 import * as fs from 'fs'
 
 const conn = new WAConnection() 
-await conn.connect() // connect first
-const creds = conn.base64EncodedAuthInfo () // contains all the keys you need to restore a session
-fs.writeFileSync('./auth_info.json', JSON.stringify(creds, null, '\t')) // save JSON to file
+// this will be called as soon as the credentials are updated
+conn.on ('credentials-updated', () => {
+    // save credentials whenever updated
+    console.log (`credentials updated!`)
+    const authInfo = conn.base64EncodedAuthInfo() // get all the auth info we need to restore this session
+    fs.writeFileSync('./auth_info.json', JSON.stringify(authInfo, null, '\t')) // save this info to a file
+})
+await conn.connect() // connect
 ```
 
 Then, to restore a session:
@@ -108,10 +146,12 @@ await conn.connect()
 
 If you're considering switching from a Chromium/Puppeteer based library, you can use WhatsApp Web's Browser credentials to restore sessions too:
 ``` ts
-conn.loadAuthInfo ('./auth_info_browser.json') // use loaded credentials & timeout in 20s
+conn.loadAuthInfo ('./auth_info_browser.json')
 await conn.connect() // works the same
 ```
 See the browser credentials type in the docs.
+
+**Note**: Upon every successive connection, WA can update part of the stored credentials. Whenever that happens, the `credentials-updated` event is triggered, and you should probably update your saved credentials upon receiving that event. Not doing so *may* lead WA to log you out after a few weeks with a 419 error code.
 
 ## QR Callback
 
@@ -143,6 +183,10 @@ on (event: 'open', listener: (result: WAOpenResult) => void): this
 on (event: 'connecting', listener: () => void): this
 /** when the connection has closed */
 on (event: 'close', listener: (err: {reason?: DisconnectReason | string, isReconnecting: boolean}) => void): this
+/** when the connection has closed */
+on (event: 'intermediate-close', listener: (err: {reason?: DisconnectReason | string}) => void): this
+/** when WA updates the credentials */
+on (event: 'credentials-updated', listener: (auth: AuthenticationCredentials) => void): this
 /** when a new QR is generated, ready for scanning */
 on (event: 'qr', listener: (qr: string) => void): this
 /** when the connection to the phone changes */
@@ -223,7 +267,11 @@ To note:
         mimetype: Mimetype.pdf, /* (for media messages) specify the type of media (optional for all media types except documents),
                                         import {Mimetype} from '@adiwajshing/baileys'
                                 */
-        filename: 'somefile.pdf' // (for media messages) file name for the media
+        filename: 'somefile.pdf', // (for media messages) file name for the media
+        /* will send audio messages as voice notes, if set to true */
+        ptt: true,
+        // will detect links & generate a link preview automatically (default true)
+        detectLinks: true
     }
     ```
 ## Forwarding Messages
@@ -432,13 +480,13 @@ Baileys is written, keeping in mind, that you may require other custom functiona
 
 First, enable the logging of unhandled messages from WhatsApp by setting
 ``` ts
-conn.logLevel = MessageLogLevel.unhandled // set to MessageLogLevel.all to see all messages received
+conn.logger.level = 'unhandled'
 ```
 This will enable you to see all sorts of messages WhatsApp sends in the console. Some examples:
 
 1. Functionality to track of the battery percentage of your phone.
     You enable logging and you'll see a message about your battery pop up in the console: 
-    ``` [Baileys] [Unhandled] s22, ["action",null,[["battery",{"live":"false","value":"52"},null]]] ``` 
+    ```s22, ["action",null,[["battery",{"live":"false","value":"52"},null]]] ``` 
     
     You now know what a battery update looks like. It'll have the following characteristics.
     - Given ```const bMessage = ["action",null,[["battery",{"live":"false","value":"52"},null]]]```
@@ -458,7 +506,7 @@ This will enable you to see all sorts of messages WhatsApp sends in the console.
     ``` message [0] === "action" && message [1] === null && message[2][0][0] === "battery" ```
 2. Functionality to keep track of the pushname changes on your phone.
     You enable logging and you'll see an unhandled message about your pushanme pop up like this: 
-    ```[Baileys] [Unhandled] s24, ["Conn",{"pushname":"adiwajshing"}]``` 
+    ```s24, ["Conn",{"pushname":"adiwajshing"}]``` 
     
     You now know what a pushname update looks like. It'll have the following characteristics.
     - Given ```const pMessage = ["Conn",{"pushname":"adiwajshing"}] ```

@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { WAConnection as Base } from './4.Events';
-import { Presence, WABroadcastListInfo, WAProfilePictureChange, WAChat, ChatModification } from './Constants';
+import { Presence, WABroadcastListInfo, WAProfilePictureChange, WAChat, ChatModification, WALoadChatOptions } from './Constants';
 import { WAMessage } from '../WAConnection/Constants';
 export declare class WAConnection extends Base {
     /** Query whether a given number is registered on WhatsApp */
@@ -45,12 +45,9 @@ export declare class WAConnection extends Base {
      * @param searchString optionally search for users
      * @returns the chats & the cursor to fetch the next page
      */
-    loadChats(count: number, before: number | null, filters?: {
-        searchString?: string;
-        custom?: (c: WAChat) => boolean;
-    }): Promise<{
+    loadChats(count: number, before: string | null, options?: WALoadChatOptions): Promise<{
         chats: WAChat[];
-        cursor: number;
+        cursor: string;
     }>;
     /**
      * Update the profile picture

@@ -2,7 +2,7 @@
 import { URL } from 'url';
 import { Agent } from 'https';
 import Decoder from '../Binary/Decoder';
-import { MessageType, MessageOptions, WAChat, WAMessageContent } from './Constants';
+import { MessageType, MessageOptions, WAChat, WAMessageContent, WAMessage, WAMessageKey } from './Constants';
 export declare const Browsers: {
     ubuntu: (browser: any) => [string, string, string];
     macOS: (browser: any) => [string, string, string];
@@ -11,7 +11,16 @@ export declare const Browsers: {
     appropriate: (browser: any) => [string, string, string];
 };
 export declare const toNumber: (t: Long | number) => number;
-export declare const waChatUniqueKey: (c: WAChat) => number;
+export declare const waChatKey: (pin: boolean) => {
+    key: (c: WAChat) => string;
+    compare: (k1: string, k2: string) => number;
+};
+export declare const waMessageKey: {
+    key: (m: WAMessage) => string;
+    compare: (k1: string, k2: string) => number;
+};
+export declare const WA_MESSAGE_ID: (m: WAMessage) => string;
+export declare const GET_MESSAGE_ID: (key: WAMessageKey) => string;
 export declare const whatsappID: (jid: string) => string;
 export declare const isGroupID: (jid: string) => boolean;
 export declare function shallowChanges<T>(old: T, current: T): Partial<T>;
