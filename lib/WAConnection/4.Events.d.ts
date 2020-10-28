@@ -95,5 +95,6 @@ export declare class WAConnection extends Base {
     }) => void): this;
     /** when WA sends back a pong */
     on(event: 'received-pong', listener: () => void): this;
-    emit(event: BaileysEvent, ...args: any[]): boolean;
+    on(event: string, listener: (json: any) => void): this;
+    emit(event: BaileysEvent | string, ...args: any[]): boolean;
 }

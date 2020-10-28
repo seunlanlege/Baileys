@@ -2,7 +2,7 @@
 import WS from 'ws';
 import Encoder from '../Binary/Encoder';
 import Decoder from '../Binary/Decoder';
-import { AuthenticationCredentials, WAUser, WANode, WATag, DisconnectReason, WAConnectionState, AnyAuthenticationCredentials, WAContact, WAChat, WAQuery, ReconnectMode, WAConnectOptions, MediaConnInfo } from './Constants';
+import { AuthenticationCredentials, WAUser, WANode, WATag, DisconnectReason, WAConnectionState, AnyAuthenticationCredentials, WAContact, WAQuery, ReconnectMode, WAConnectOptions, MediaConnInfo } from './Constants';
 import { EventEmitter } from 'events';
 import KeyedDB from '@adiwajshing/keyed-db';
 import { Agent } from 'http';
@@ -25,7 +25,7 @@ export declare class WAConnection extends EventEmitter {
     phoneConnected: boolean;
     /** key to use to order chats */
     chatOrderingKey: {
-        key: (c: WAChat) => string;
+        key: (c: import("./Constants").WAChat) => string;
         compare: (k1: string, k2: string) => number;
     };
     logger: pino.Logger;
@@ -38,7 +38,8 @@ export declare class WAConnection extends EventEmitter {
         binaryTags?: any[];
     }[];
     maxCachedMessages: number;
-    chats: KeyedDB<WAChat, string>;
+    loadProfilePicturesForChatsAutomatically: boolean;
+    chats: KeyedDB<import("./Constants").WAChat, string>;
     contacts: {
         [k: string]: WAContact;
     };
@@ -58,10 +59,6 @@ export declare class WAConnection extends EventEmitter {
     };
     protected encoder: Encoder;
     protected decoder: Decoder;
-    protected pendingRequests: {
-        resolve: () => void;
-        reject: (error: any) => void;
-    }[];
     protected phoneCheckInterval: any;
     protected referenceDate: Date;
     protected lastSeen: Date;
@@ -70,6 +67,7 @@ export declare class WAConnection extends EventEmitter {
     protected lastDisconnectReason: DisconnectReason;
     protected mediaConn: MediaConnInfo;
     protected debounceTimeout: NodeJS.Timeout;
+    protected rejectPendingConnection: (e: Error) => void;
     constructor();
     /**
      * Connect to WhatsAppWeb
@@ -96,16 +94,6 @@ export declare class WAConnection extends EventEmitter {
      * @param authInfo the authentication credentials or file path to auth credentials
      */
     loadAuthInfo(authInfo: AnyAuthenticationCredentials | string): this;
-    /**
-     * Register for a callback for a certain function
-     * @param parameters name of the function along with some optional specific parameters
-     */
-    registerCallback(parameters: [string, string?, string?] | string, callback: any): any;
-    /**
-     * Cancel all further callback events associated with the given parameters
-     * @param parameters name of the function along with some optional specific parameters
-     */
-    deregisterCallback(parameters: [string, string?, string?] | string): any;
     /**
      * Wait for a message with a certain tag to be received
      * @param tag the message tag to await
@@ -137,6 +125,8 @@ export declare class WAConnection extends EventEmitter {
      * @return the message tag
      */
     protected sendBinary(json: WANode, tags: WATag, tag?: string, longTag?: boolean): Promise<string>;
+    protected startDebouncedTimeout(): void;
+    protected stopDebouncedTimeout(): void;
     /**
      * Send a plain JSON message to the WhatsApp servers
      * @param json the message to send

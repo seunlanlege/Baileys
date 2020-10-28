@@ -60,6 +60,7 @@ export declare const generateProfilePicture: (buffer: Buffer) => Promise<{
 export declare const ProxyAgent: (host: string | URL) => Agent;
 /** gets the SHA256 of the given media message */
 export declare const mediaMessageSHA256B64: (message: WAMessageContent) => string;
+export declare function getAudioDuration(buffer: Buffer): Promise<number>;
 /** generates a thumbnail for a given media, if required */
 export declare function generateThumbnail(buffer: Buffer, mediaType: MessageType, info: MessageOptions): Promise<void>;
 /**

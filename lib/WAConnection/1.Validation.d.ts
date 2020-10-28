@@ -1,7 +1,7 @@
 import { WAConnection as Base } from './0.Base';
 export declare class WAConnection extends Base {
     /** Authenticate the connection */
-    protected authenticate(startDebouncedTimeout: () => void, stopDebouncedTimeout: () => void, reconnect?: string): Promise<void>;
+    protected authenticate(reconnect?: string): Promise<void>;
     /**
      * Send the same queries WA Web sends after connect
      */

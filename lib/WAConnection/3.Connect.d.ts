@@ -17,7 +17,6 @@ export declare class WAConnection extends Base {
         }>;
         cancelChats: () => void;
     };
-    private releasePendingRequests;
     private onMessageRecieved;
     /** Send a keep alive request every X seconds, server updates & responds with last seen */
     private startKeepAliveRequest;
