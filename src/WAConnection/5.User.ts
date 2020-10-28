@@ -8,6 +8,7 @@ import {
 } from '../WAConnection/Constants'
 import { generateProfilePicture, waChatKey, whatsappID, unixTimestampSeconds } from './Utils'
 import { Mutex } from './Mutex'
+import { type } from 'os'
 
 // All user related functions -- get profile picture, set status etc.
 
@@ -97,11 +98,14 @@ export class WAConnection extends Base {
      * @returns the chats & the cursor to fetch the next page
      */
     async loadChats (count: number, before: string | null, options: WALoadChatOptions = {}) {
+        const searchString = options.searchString?.toLowerCase()
         const chats = this.chats.paginated (before, count, options && (chat => (
             (typeof options?.custom !== 'function' || options?.custom(chat)) &&
-            (typeof options?.searchString === 'undefined' || chat.name?.includes (options.searchString) || chat.jid?.startsWith(options.searchString))
+            (typeof searchString === 'undefined' || chat.name?.toLowerCase().includes (searchString) || chat.jid?.startsWith(searchString))
         )))
-        if (options.loadProfilePicture !== false) {
+        let loadPP = this.loadProfilePicturesForChatsAutomatically
+        if (typeof options.loadProfilePicture !== 'undefined') loadPP = options.loadProfilePicture
+        if (loadPP) {
             await Promise.all (
                 chats.map (async chat => (
                     typeof chat.imgUrl === 'undefined' && await this.setProfilePicture (chat)

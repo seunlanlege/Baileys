@@ -57,6 +57,7 @@ export interface WAQuery {
     waitForOpen?: boolean
     longTag?: boolean
     requiresPhoneConnection?: boolean
+    startDebouncedTimeout?: boolean
 }
 export enum ReconnectMode {
     /** does not reconnect */
@@ -333,6 +334,8 @@ export interface MessageOptions {
     uploadAgent?: Agent
     /** If set to true (default), automatically detects if you're sending a link & attaches the preview*/
     detectLinks?: boolean
+    /** Optionally specify the duration of the media (audio/video) in seconds */
+    duration?: number
     /** Fetches new media options for every media file */
     forceNewMediaOptions?: boolean
 }

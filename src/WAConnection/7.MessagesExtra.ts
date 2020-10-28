@@ -23,7 +23,6 @@ export class WAConnection extends Base {
 
         const info: MessageInfo = {reads: [], deliveries: []}
         if (response) {
-            //console.log (response)
             const reads = response.filter (node => node[0] === 'read')
             if (reads[0]) {
                 info.reads = reads[0][2].map (item => item[1])
@@ -109,7 +108,7 @@ export class WAConnection extends Base {
         const cursorValue = hasCursor && chat.messages.get (GET_MESSAGE_ID(cursor))
         
         let messages: WAMessage[]
-        if (chat && mostRecentFirst && (!hasCursor || cursorValue)) {
+        if (chat?.messages && mostRecentFirst && (!hasCursor || cursorValue)) {
             messages = chat.messages.paginatedByValue (cursorValue, count, null, 'before')
             
             const diff = count - messages.length

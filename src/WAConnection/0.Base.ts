@@ -16,23 +16,24 @@ import {
     WAConnectionState,
     AnyAuthenticationCredentials,
     WAContact,
-    WAChat,
     WAQuery,
     ReconnectMode,
     WAConnectOptions,
     MediaConnInfo,
     DEFAULT_ORIGIN,
+    TimedOutError,
 } from './Constants'
 import { EventEmitter } from 'events'
 import KeyedDB from '@adiwajshing/keyed-db'
 import { STATUS_CODES, Agent } from 'http'
 import pino from 'pino'
+import { rejects } from 'assert'
 
 const logger = pino({ prettyPrint: { levelFirst: true, ignore: 'hostname', translateTime: true },  prettifier: require('pino-pretty') })
 
 export class WAConnection extends EventEmitter {
     /** The version of WhatsApp Web we're telling the servers we are */
-    version: [number, number, number] = [2, 2041, 6]
+    version: [number, number, number] = [2, 2043, 8]
     /** The Browser we're telling the WhatsApp Web servers we are */
     browserDescription: [string, string, string] = Utils.Browsers.baileys ('Chrome')
     /** Metadata like WhatsApp id, name set on WhatsApp etc. */
@@ -46,8 +47,8 @@ export class WAConnection extends EventEmitter {
         maxIdleTimeMs: 15_000,
         waitOnlyForLastMessage: false,
         waitForChats: true,
-        maxRetries: 5,
-        connectCooldownMs: 3000,
+        maxRetries: 10,
+        connectCooldownMs: 4000,
         phoneResponseTime: 10_000,
         alwaysUseTakeover: true
     }
@@ -65,6 +66,7 @@ export class WAConnection extends EventEmitter {
     messageLog: { tag: string, json: string, fromMe: boolean, binaryTags?: any[] }[] = []
 
     maxCachedMessages = 50
+    loadProfilePicturesForChatsAutomatically = true
 
     chats = new KeyedDB (Utils.waChatKey(false), value => value.jid)
     contacts: { [k: string]: WAContact } = {}
@@ -80,7 +82,6 @@ export class WAConnection extends EventEmitter {
     protected callbacks: {[k: string]: any} = {}
     protected encoder = new Encoder()
     protected decoder = new Decoder()
-    protected pendingRequests: {resolve: () => void, reject: (error) => void}[] = []
     protected phoneCheckInterval = undefined
 
     protected referenceDate = new Date () // used for generating tags
@@ -92,11 +93,12 @@ export class WAConnection extends EventEmitter {
 
     protected mediaConn: MediaConnInfo
     protected debounceTimeout: NodeJS.Timeout
+    protected rejectPendingConnection = (e: Error) => {}
 
     constructor () {
         super ()
-        this.registerCallback (['Cmd', 'type:disconnect'], json => (
-            this.unexpectedDisconnect(json[1].kind || 'unknown')
+        this.on ('CB:Cmd,type:disconnect', json => (
+            this.state === 'open' && this.unexpectedDisconnect(json[1].kind || 'unknown')
         ))
     }
     /**
@@ -170,48 +172,6 @@ export class WAConnection extends EventEmitter {
         return this
     }
     /**
-     * Register for a callback for a certain function
-     * @param parameters name of the function along with some optional specific parameters
-     */
-    registerCallback(parameters: [string, string?, string?] | string, callback) {
-        if (typeof parameters === 'string') {
-            return this.registerCallback([parameters, null, null], callback)
-        }
-        if (!Array.isArray(parameters)) {
-            throw new Error('parameters (' + parameters + ') must be a string or array')
-        }
-        const func = 'function:' + parameters[0]
-        const key = parameters[1] || ''
-        const key2 = parameters[2] || ''
-        if (!this.callbacks[func]) {
-            this.callbacks[func] = {}
-        }
-        if (!this.callbacks[func][key]) {
-            this.callbacks[func][key] = {}
-        }
-        this.callbacks[func][key][key2] = callback
-    }
-    /**
-     * Cancel all further callback events associated with the given parameters
-     * @param parameters name of the function along with some optional specific parameters
-     */
-    deregisterCallback(parameters: [string, string?, string?] | string) {
-        if (typeof parameters === 'string') {
-            return this.deregisterCallback([parameters])
-        }
-        if (!Array.isArray(parameters)) {
-            throw new Error('parameters (' + parameters + ') must be a string or array')
-        }
-        const func = 'function:' + parameters[0]
-        const key = parameters[1] || ''
-        const key2 = parameters[2] || ''
-        if (this.callbacks[func] && this.callbacks[func][key] && this.callbacks[func][key][key2]) {
-            delete this.callbacks[func][key][key2]
-            return
-        }
-        this.logger.warn('Could not find ' + JSON.stringify(parameters) + ' to deregister')
-    }
-    /**
      * Wait for a message with a certain tag to be received
      * @param tag the message tag to await
      * @param json query that was sent
@@ -245,7 +205,7 @@ export class WAConnection extends EventEmitter {
      * @param tag the tag to attach to the message
      */
     async query(q: WAQuery) {
-        let {json, binaryTags, tag, timeoutMs, expect200, waitForOpen, longTag, requiresPhoneConnection} = q
+        let {json, binaryTags, tag, timeoutMs, expect200, waitForOpen, longTag, requiresPhoneConnection, startDebouncedTimeout} = q
         requiresPhoneConnection = requiresPhoneConnection !== false
         waitForOpen = waitForOpen !== false
         if (waitForOpen) await this.waitForConnection()
@@ -272,6 +232,7 @@ export class WAConnection extends EventEmitter {
                 {query: json, message, status: response.status}
             )
         }
+        if (startDebouncedTimeout) this.stopDebouncedTimeout ()
         return response
     }
     /** interval is started when a query takes too long to respond */
@@ -319,6 +280,14 @@ export class WAConnection extends EventEmitter {
         await this.send(buff) // send it off
         return tag
     }
+    protected startDebouncedTimeout () {
+        this.stopDebouncedTimeout ()
+        this.debounceTimeout = setTimeout (() => this.rejectPendingConnection(TimedOutError()), this.connectOptions.maxIdleTimeMs)
+    }
+    protected stopDebouncedTimeout ()  {
+        this.debounceTimeout && clearTimeout (this.debounceTimeout)
+        this.debounceTimeout = null
+    }
     /**
      * Send a plain JSON message to the WhatsApp servers
      * @param json the message to send
@@ -341,7 +310,20 @@ export class WAConnection extends EventEmitter {
 
         await Utils.promiseTimeout (
             this.pendingRequestTimeoutMs, 
-            (resolve, reject) => this.pendingRequests.push({resolve, reject})
+            (resolve, reject) => {
+                const onClose = ({ reason }) => {
+                    if (reason === DisconnectReason.invalidSession || reason === DisconnectReason.intentional) {
+                        reject (new Error(reason))
+                    }
+                    this.off ('open', onOpen)
+                }
+                const onOpen = () => {
+                    resolve ()
+                    this.off ('close', onClose)
+                }
+                this.once ('close', onClose)
+                this.once ('open', onOpen)
+            }
         )
     }
     /**
@@ -370,11 +352,6 @@ export class WAConnection extends EventEmitter {
         this.lastDisconnectTime = new Date ()
 
         this.endConnection ()
-
-        if (reason === 'invalid_session' || reason === 'intentional') {
-            this.pendingRequests.forEach (({reject}) => reject(new Error(reason)))
-            this.pendingRequests = []
-        }
         // reconnecting if the timeout is active for the reconnect loop
         this.emit ('close', { reason, isReconnecting })
     }
@@ -389,10 +366,11 @@ export class WAConnection extends EventEmitter {
         this.keepAliveReq && clearInterval(this.keepAliveReq)
         this.clearPhoneCheckInterval ()
 
+        this.rejectPendingConnection && this.rejectPendingConnection (new Error('close'))
 
         try {
             this.conn?.close()
-            this.conn?.terminate()
+            //this.conn?.terminate()
         } catch {
 
         }
@@ -401,11 +379,9 @@ export class WAConnection extends EventEmitter {
         this.msgCount = 0
 
         Object.keys(this.callbacks).forEach(key => {
-            if (!key.startsWith('function:')) {
-                this.logger.trace (`cancelling message wait: ${key}`)
-                this.callbacks[key].errCallback(new Error('close'))
-                delete this.callbacks[key]
-            }
+            this.logger.debug (`cancelling message wait: ${key}`)
+            this.callbacks[key].errCallback(new Error('close'))
+            delete this.callbacks[key]
         })
     }
     /**
@@ -423,7 +399,4 @@ export class WAConnection extends EventEmitter {
         const seconds = Utils.unixTimestampSeconds(this.referenceDate)
         return `${longTag ? seconds : (seconds%1000)}.--${this.msgCount}`
     }
-    /*protected log(text, level: MessageLogLevel) {
-        (this.logLevel >= level) && console.log(`[Baileys][${new Date().toLocaleString()}] ${text}`)
-    }*/
 }
